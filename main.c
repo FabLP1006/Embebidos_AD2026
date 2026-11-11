@@ -46,6 +46,23 @@
 #endif /* DUAL_CORE_BOOT_SYNC_SEQUENCE */
 #define MAX30102_ADDR   (0x57 << 1)   // 0xAE: HAL pide dirección de 8 bits
 #define REG_PART_ID     0xFF
+#define MAX30102_ADDR      (0x57 << 1)
+#define REG_INT_STATUS_1   0x00
+#define REG_FIFO_WR_PTR    0x04
+#define REG_OVF_COUNTER    0x05
+#define REG_FIFO_RD_PTR    0x06
+#define REG_FIFO_CONFIG    0x08
+#define REG_MODE_CONFIG    0x09
+#define REG_SPO2_CONFIG    0x0A
+#define REG_LED1_PA        0x0C   // LED rojo
+#define REG_LED2_PA        0x0D   // LED infrarrojo
+#define REG_PART_ID        0xFF
+#define REG_FIFO_DATA      0x07
+#define FS_HZ 	           25     // 100 muestras/s / promedio de 4
+#define FINGER_THR         70000  // empírico: sin dedo ~40-51k, con dedo ~110k
+#define REFRACT_SMP        8      // 8 muestras = 320 ms → máximo ~187 BPM
+#define N_AVG              4      // intervalos promediados
+#define PRINT_EVERY        25
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -60,7 +77,12 @@ I2C_HandleTypeDef hi2c2;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-
+float    dc = 0, ac = 0;
+float    prev1 = 0, prev2 = 0;
+float    env = 0;
+uint32_t sample_idx = 0, last_peak = 0;
+uint32_t intervals[N_AVG];
+uint8_t  int_pos = 0, int_cnt = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -77,6 +99,110 @@ static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN 0 */
 void uart_print(const char *msg) {
     HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
+}
+
+HAL_StatusTypeDef max_write(uint8_t reg, uint8_t val) {
+    return HAL_I2C_Mem_Write(&hi2c2, MAX30102_ADDR, reg,
+                             I2C_MEMADD_SIZE_8BIT, &val, 1, 100);
+}
+
+HAL_StatusTypeDef max_read(uint8_t reg, uint8_t *val) {
+    return HAL_I2C_Mem_Read(&hi2c2, MAX30102_ADDR, reg,
+                            I2C_MEMADD_SIZE_8BIT, val, 1, 100);
+}
+
+HAL_StatusTypeDef max_init(void) {
+    uint8_t v;
+    uint32_t t0;
+
+    // 1. Reset por software y espera a que termine
+    if (max_write(REG_MODE_CONFIG, 0x40) != HAL_OK) return HAL_ERROR;
+    t0 = HAL_GetTick();
+    do {
+        if (max_read(REG_MODE_CONFIG, &v) != HAL_OK) return HAL_ERROR;
+        if (HAL_GetTick() - t0 > 100) return HAL_TIMEOUT;
+    } while (v & 0x40);
+
+    // 2. Leer estado limpia bandera de encendido
+    max_read(REG_INT_STATUS_1, &v);
+
+    // 3. Vaciar FIFO
+    max_write(REG_FIFO_WR_PTR, 0x00);
+    max_write(REG_OVF_COUNTER, 0x00);
+    max_write(REG_FIFO_RD_PTR, 0x00);
+
+    // 4. Configuración
+    max_write(REG_FIFO_CONFIG, 0x50);
+    max_write(REG_SPO2_CONFIG, 0x27);
+    max_write(REG_LED1_PA, 0x24);
+    max_write(REG_LED2_PA, 0x24);
+    max_write(REG_MODE_CONFIG, 0x03);   // al final: arranca muestreo
+
+    return HAL_OK;
+}
+uint8_t max_read_fifo(uint32_t *red, uint32_t *ir, uint8_t max_n) {
+    static uint8_t raw[32 * 6];     // static: no ocupa pila
+    uint8_t wr, rd, n;
+
+    if (max_read(REG_FIFO_WR_PTR, &wr) != HAL_OK) return 0;
+    if (max_read(REG_FIFO_RD_PTR, &rd) != HAL_OK) return 0;
+
+    n = (wr - rd) & 0x1F;           // muestras pendientes
+    if (n == 0) return 0;
+    if (n > max_n) n = max_n;
+
+    // Lectura en ráfaga: n muestras × 6 bytes
+    if (HAL_I2C_Mem_Read(&hi2c2, MAX30102_ADDR, REG_FIFO_DATA,
+                         I2C_MEMADD_SIZE_8BIT, raw, n * 6, 100) != HAL_OK)
+        return 0;
+
+    for (uint8_t i = 0; i < n; i++) {
+        uint8_t *s = &raw[i * 6];
+        red[i] = (((uint32_t)s[0] << 16) | ((uint32_t)s[1] << 8) | s[2]) & 0x3FFFF;
+        ir[i]  = (((uint32_t)s[3] << 16) | ((uint32_t)s[4] << 8) | s[5]) & 0x3FFFF;
+    }
+    return n;
+}
+float hr_process(uint32_t ir_raw) {
+    float x = (float)ir_raw;
+
+    sample_idx++;
+
+    // 1. Sin dedo: reiniciar estado
+    if (ir_raw < FINGER_THR) {
+        dc = x; ac = 0; env = 0;
+        prev1 = prev2 = 0;
+        last_peak = 0; int_pos = 0; int_cnt = 0;
+        return -1.0f;
+    }
+
+    // 2. Quitar DC e invertir
+    dc += (x - dc) / 16.0f;
+    ac = dc - x;
+
+    // 3. Envolvente con decaimiento
+    env *= 0.98f;
+    if (ac > env) env = ac;
+
+    // 4. ¿prev1 fue pico?
+    if (prev1 > prev2 && prev1 >= ac && prev1 > 0.5f * env &&
+        (sample_idx - 1 - last_peak) > REFRACT_SMP) {
+        uint32_t peak = sample_idx - 1;
+        if (last_peak != 0) {
+            intervals[int_pos] = peak - last_peak;
+            int_pos = (int_pos + 1) % N_AVG;
+            if (int_cnt < N_AVG) int_cnt++;
+        }
+        last_peak = peak;
+    }
+    prev2 = prev1;
+    prev1 = ac;
+
+    // 5. BPM con promedio de N_AVG intervalos
+    if (int_cnt < N_AVG) return 0.0f;
+    uint32_t sum = 0;
+    for (uint8_t i = 0; i < N_AVG; i++) sum += intervals[i];
+    return 60.0f * FS_HZ * N_AVG / (float)sum;
 }
 /* USER CODE END 0 */
 
@@ -151,16 +277,31 @@ Error_Handler();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
   char buf[64];
-  uint8_t id = 0;
+  uint8_t v, p1, p2;
 
-  if (HAL_I2C_IsDeviceReady(&hi2c2, MAX30102_ADDR, 3, 100) != HAL_OK) {
-      uart_print("Sin respuesta en I2C2\r\n");
+  if (max_init() != HAL_OK) {
+      uart_print("Error en max_init\r\n");
   } else {
-      HAL_I2C_Mem_Read(&hi2c2, MAX30102_ADDR, REG_PART_ID,
-                       I2C_MEMADD_SIZE_8BIT, &id, 1, 100);
-      snprintf(buf, sizeof(buf), "PART_ID = 0x%02X\r\n", id);
+      max_read(REG_MODE_CONFIG, &v);
+      snprintf(buf, sizeof(buf), "MODE = 0x%02X (esperado 0x03)\r\n", v);
+      uart_print(buf);
+
+      max_read(REG_SPO2_CONFIG, &v);
+      snprintf(buf, sizeof(buf), "SPO2 = 0x%02X (esperado 0x27)\r\n", v);
+      uart_print(buf);
+
+      max_read(REG_FIFO_CONFIG, &v);
+      snprintf(buf, sizeof(buf), "FIFO = 0x%02X (esperado 0x50)\r\n", v);
+      uart_print(buf);
+
+      max_read(REG_FIFO_WR_PTR, &p1);
+      HAL_Delay(200);
+      max_read(REG_FIFO_WR_PTR, &p2);
+      snprintf(buf, sizeof(buf), "WR_PTR: %u -> %u\r\n", p1, p2);
       uart_print(buf);
   }
+  uint32_t red[32], ir[32];
+  uint8_t n;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -170,7 +311,24 @@ Error_Handler();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-  }
+	    n = max_read_fifo(red, ir, 32);
+	    for (uint8_t i = 0; i < n; i++) {
+	        float bpm = hr_process(ir[i]);
+
+	        if ((sample_idx % PRINT_EVERY) != 0)    // imprime solo 1 de cada 25
+	            continue;
+
+	        if (bpm < 0) {
+	            uart_print("Sin dedo\r\n");
+	        } else if (bpm == 0) {
+	            uart_print("Midiendo...\r\n");
+	        } else {
+	            snprintf(buf, sizeof(buf), "BPM: %d\r\n", (int)(bpm + 0.5f));
+	            uart_print(buf);
+	        }
+	    }
+	    HAL_Delay(20);
+	  }
   /* USER CODE END 3 */
 }
 
