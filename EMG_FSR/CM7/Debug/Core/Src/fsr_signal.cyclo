@@ -1,0 +1,4 @@
+../Core/Src/fsr_signal.c:8:13:channel_stats	5
+../Core/Src/fsr_signal.c:22:17:level_of	4
+../Core/Src/fsr_signal.c:29:17:to_mv	3
+../Core/Src/fsr_signal.c:35:6:FsrSignal_Process	8

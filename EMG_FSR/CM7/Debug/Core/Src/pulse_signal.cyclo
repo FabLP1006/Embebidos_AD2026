@@ -1,0 +1,10 @@
+../Core/Src/pulse_signal.c:6:6:Pulse_Reset	1
+../Core/Src/pulse_signal.c:11:13:insertion_sort_u32	4
+../Core/Src/pulse_signal.c:19:13:insertion_sort_f	4
+../Core/Src/pulse_signal.c:28:14:hr_process	12
+../Core/Src/pulse_signal.c:70:14:spo2_update	17
+../Core/Src/pulse_signal.c:107:6:Pulse_Push	1
+../Core/Src/pulse_signal.c:112:13:Pulse_Status	4
+../Core/Src/pulse_signal.c:119:10:Pulse_Bpm	2
+../Core/Src/pulse_signal.c:120:10:Pulse_Spo2	3
+../Core/Src/pulse_signal.c:121:10:Pulse_PiX100	5

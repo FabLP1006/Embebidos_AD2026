@@ -1,0 +1,3 @@
+D:/Documentos/Escuela/Uni/Sistemas_embebidos_avanzados/Proyecto_practica/EMG_FSR/EMG_FSR/Common/Src/system_stm32h7xx_dualcore_boot_cm4_cm7.c:180:6:SystemInit	4	static
+D:/Documentos/Escuela/Uni/Sistemas_embebidos_avanzados/Proyecto_practica/EMG_FSR/EMG_FSR/Common/Src/system_stm32h7xx_dualcore_boot_cm4_cm7.c:335:6:SystemCoreClockUpdate	48	static
+D:/Documentos/Escuela/Uni/Sistemas_embebidos_avanzados/Proyecto_practica/EMG_FSR/EMG_FSR/Common/Src/system_stm32h7xx_dualcore_boot_cm4_cm7.c:444:6:ExitRun0Mode	0	static

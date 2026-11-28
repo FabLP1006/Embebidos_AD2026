@@ -1,0 +1,5 @@
+../Core/Src/main.c:76:5:main	16	static
+../Core/Src/main.c:135:6:PeriphCommonClock_Config	200	static
+../Core/Src/main.c:160:13:MX_BDMA_Init	16	static
+../Core/Src/main.c:171:13:MX_DMA_Init	16	static
+../Core/Src/main.c:187:6:Error_Handler	4	static,ignoring_inline_asm

@@ -1,0 +1,9 @@
+../Core/Src/fsr_task.c:32:13:Fsr_Init	16
+../Core/Src/fsr_task.c:62:6:Fsr_CreateTask	3
+../Core/Src/fsr_task.c:68:6:Fsr_AdcBlockISR	9
+../Core/Src/fsr_task.c:81:6:Fsr_AdcErrorISR	3
+../Core/Src/fsr_task.c:85:5:Fsr_GetLatest	3
+../Core/Src/fsr_task.c:89:10:Fsr_Errors	1
+../Core/Src/fsr_task.c:91:6:Fsr_GetDiag	3
+../Core/Src/fsr_task.c:100:13:take_half	4
+../Core/Src/fsr_task.c:108:13:FsrTask	5
